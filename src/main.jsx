@@ -1,0 +1,17 @@
+import React from "react";
+import ReactDOM from "react-dom/client";
+import { HashRouter, BrowserRouter } from "react-router-dom";
+import { Capacitor } from "@capacitor/core";
+import App from "./App";
+import "./index.css";
+import "./assets/css/sf-pro.css";
+
+const Router = Capacitor.isNativePlatform()
+  ? HashRouter
+  : BrowserRouter;
+
+ReactDOM.createRoot(document.getElementById("root")).render(
+  <Router>
+    <App />
+  </Router>
+);

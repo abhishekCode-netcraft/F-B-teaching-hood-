@@ -1,0 +1,206 @@
+import React, { useState } from "react";
+import schoolSectionLeftImage from "./../assets/images/school-section.jpeg";
+import { homePageIcons } from "../assets/icons/HomePageIcons";
+
+// 5. For Schools Section
+const SchoolsSection = () => {
+  const features = [
+    {
+      icon: (
+        <img
+          src={homePageIcons.schoolPostUnlimited}
+          className="w-6 h-6 text-red-500"
+        />
+      ),
+      text: "Post unlimited teaching vacancies and reach hundreds of active job-seeking teachers.",
+      bgColor: "bg-red-100",
+    },
+    {
+      icon: (
+        <img
+          src={homePageIcons.schoolGetFree}
+          className="w-6 h-6 text-blue-500"
+        />
+      ),
+      text: "Get free access to candidate pool and contact matching profiles.",
+      bgColor: "bg-blue-100",
+    },
+    {
+      icon: (
+        <img
+          src={homePageIcons.schoolFindRight}
+          className="w-6 h-6 text-yellow-500"
+        />
+      ),
+      text: "Find the right fit faster with smart filtering and easy onboarding.",
+      bgColor: "bg-yellow-100",
+    },
+  ];
+
+  const recentApplications = [
+    {
+      name: "Priya Sharma",
+      role: "Math Teacher",
+      status: "New",
+      statusColor: "bg-blue-100 text-blue-600",
+      avatar: "P",
+    },
+    {
+      name: "Rahul Verma",
+      role: "Science Teacher",
+      status: "Screening",
+      statusColor: "bg-yellow-100 text-yellow-600",
+      avatar: "R",
+    },
+    {
+      name: "Anjali Patel",
+      role: "English Teacher",
+      status: "Shortlisted",
+      statusColor: "bg-green-100 text-green-600",
+      avatar: "A",
+    },
+  ];
+
+  return (
+    <section className="py-16 md:py-24 bg-gray-50">
+      <div className="mx-auto px-4">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 lg:gap-12 items-center">
+          {/* Left Side - Content */}
+          <div className="mx-8">
+            {/* Badge */}
+            <div className="inline-flex items-center space-x-2 bg-green-100 px-4 py-2 rounded-full mb-6">
+              <span className="text-lg text-green-600 font-semibold text-[22px]">
+                For Schools
+              </span>
+            </div>
+            <a
+              href="/post-job"
+              className="relative top-[7px] h-[25px] inline-flex items-center space-x-2 px-4 py-1 rounded-full mb-6 ml-4 font-bold bg-blue-500 text-white"
+            >
+              Post a Job
+            </a>
+
+            {/* Heading */}
+            <h2 className="text-3xl md:text-4xl lg:text-5xl font-semibold text-gray-900 mb-6">
+              Make your life easy, simplify your hiring process
+            </h2>
+
+            {/* Features List */}
+            <div className="space-y-6">
+              {features.map((feature, index) => (
+                <div key={index} className="flex items-start space-x-4">
+                  <div
+                    className={`flex-shrink-0 w-12 h-12 ${feature.bgColor} rounded-xl shadow-sm flex items-center justify-center border border-gray-100`}
+                  >
+                    {feature.icon}
+                  </div>
+                  <p className="text-gray-700 leading-relaxed pt-2 font-semibold text-[18px]">
+                    {feature.text}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Right Side - Dashboard Preview */}
+          {/* <div className="relative">
+            <div className="bg-white rounded-2xl shadow-2xl border border-gray-100 p-6 w-[95%]">
+              <div className="flex items-center justify-between mb-12">
+                <div
+                  className="
+                    absolute bg-white rounded-xl p-4
+                    -top-8 -left-6
+                    shadow-[0px_0px_0px_rgba(0,0,0,0),0px_0px_0px_rgba(0,0,0,0),0px_10px_10px_rgba(0,0,0,0.15),3px_4px_4px_rgba(0,0,0,0.10)]
+                  "
+                >
+                  <div className="text-sm text-gray-500 mb-1">
+                    Avg. Time to Hire
+                  </div>
+                  <div className="text-2xl font-normal text-green-500">
+                    7 Days
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between w-full">
+                  <div className="justify-start">
+                    <div className="text-lg font-medium text-gray-700">
+                      Hiring Dashboard
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      Manage all your vacancies
+                    </div>
+                  </div>
+
+                  <span className="justify-end px-4 py-2 bg-green-50 text-green-500 text-sm font-normal rounded-lg whitespace-nowrap">
+                    12 Active
+                  </span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4 mb-6">
+                <div className="bg-blue-50 rounded-xl p-4">
+                  <div className="text-3xl font-normal text-blue-600 mb-1">
+                    247
+                  </div>
+                  <div className="text-sm text-gray-600">
+                    Total Applications
+                  </div>
+                </div>
+                <div className="bg-green-50 rounded-xl p-4">
+                  <div className="text-3xl font-normal text-green-600 mb-1">
+                    18
+                  </div>
+                  <div className="text-sm text-gray-600">Shortlisted</div>
+                </div>
+              </div>
+
+              <div>
+                <div className="text-sm font-semibold text-gray-700 mb-3">
+                  Recent Applications
+                </div>
+                <div className="space-y-3">
+                  {recentApplications.map((app, index) => (
+                    <div
+                      key={index}
+                      className="flex items-center justify-between p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition"
+                    >
+                      <div className="flex items-center space-x-3">
+                        <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-green-500 rounded-full flex items-center justify-center text-white font-bold">
+                          {app.avatar}
+                        </div>
+                        <div>
+                          <div className="font-semibold text-gray-900 text-sm">
+                            {app.name}
+                          </div>
+                          <div className="text-xs text-gray-500">
+                            {app.role}
+                          </div>
+                        </div>
+                      </div>
+                      <span
+                        className={`px-3 py-1 rounded-full text-xs font-semibold ${app.statusColor}`}
+                      >
+                        {app.status}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="absolute -z-10 -top-4 -right-4 w-32 h-32 bg-green-100 rounded-full opacity-50"></div>
+          </div> */}
+
+          <div className="relative w-full">
+            <img
+              src={schoolSectionLeftImage}
+              className="w-full object-cover h-[400px] sm:h-[500px] md:h-[500px] rounded-2xl shadow-2xl"
+            />
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+};
+
+export default SchoolsSection;
