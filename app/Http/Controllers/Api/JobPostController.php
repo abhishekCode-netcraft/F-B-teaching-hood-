@@ -1,0 +1,594 @@
+<?php
+
+namespace App\Http\Controllers\Api;
+
+use App\Http\Controllers\Controller;
+use App\Mail\AppliedJob as MailAppliedJob;
+use App\Models\JobPost;
+use App\Models\LikedJob;
+use App\Models\AppliedJob;
+use App\Models\User;
+use Carbon\Carbon;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Validator;
+use App\Models\State;
+use App\Models\Subject;
+use App\Models\GradeLevel;
+use App\Models\City;
+
+class JobPostController extends Controller
+{
+    public function index(Request $request)
+    {
+        $perPage = (int) request()->get('perPage', 10);
+        $offset  = (int) request()->get('offset', 0);
+
+        $subjectsArr = [];
+        $gradeLevelsArr = [];
+
+        if (auth()->check() && !isset(request()->jobPost)) {
+            $gradeLevels = User::find(auth()->user()->id)
+                ->with('additional_info.grade_levels')
+                ->first();
+
+            $subjects = User::find(auth()->user()->id)
+                ->with('additional_info.subjects')
+                ->first();
+
+            $subjectsArr = $subjects->additional_info->subjects->pluck('id');
+            $gradeLevelsArr = $gradeLevels->additional_info->grade_levels->pluck('id');
+        }
+
+        // City::where('name', $request->city_name)->first();   
+        // $visibilityDays = (int) ($user->plan->features['visibility'] ?? 0);
+
+        $jobs = JobPost::withCount('appliedJobs')
+            ->with('city.state', 'grade', 'subject', 'like', 'applied')
+            ->where('status', true)
+            ->where('is_closed', false)
+            ->where('showing_deadline', '>', now())
+            ->when($request->search != "", function ($query) use ($request) {
+                $keywords = explode(' ', $request->search);
+                $query->where(function ($q) use ($keywords) {
+                    foreach ($keywords as $word) {
+                        $q->where(function ($sub) use ($word) {
+                            $sub->where('school_name', 'like', "%{$word}%")
+                                // ->orWhere('job_description', 'like', "%{$word}%")
+                                ->orWhere('position', 'like', "%{$word}%")
+                                ->orWhere('board', 'like', "%{$word}%")
+
+                                ->orWhereHas('city', function ($city) use ($word) {
+                                    $city->where('name', 'like', "%{$word}%");
+                                })
+
+                                ->orWhereHas('subject', function ($subject) use ($word) {
+                                    $subject->where('name', 'like', "%{$word}%");
+                                })
+
+                                ->orWhereHas('grade', function ($grade) use ($word) {
+                                    $grade->where('name', 'like', "%{$word}%");
+                                });
+                        });
+                    }
+                });
+            })
+            ->when($request->school_name, function ($query) use ($request) {
+                $query->where('school_name', 'like', '%' . $request->school_name . '%');
+            })
+            ->when($request->subject_id != 'all', function ($query) use ($request) {
+                $query->where('subject_id', $request->subject_id);
+            })
+            ->when($request->grade_id != 'all', function ($query) use ($request) {
+                $query->where('grade_id', $request->grade_id);
+            })
+            ->when(!empty($subjectsArr), function ($query) use ($subjectsArr) {
+                $query->orWhereIn('subject_id', $subjectsArr);
+            })
+            ->when(!empty($gradeLevelsArr), function ($query) use ($gradeLevelsArr) {
+                $query->orWhereIn('grade_id', $gradeLevelsArr);
+            })
+            ->when($request->city_id != 'all', function ($query) use ($request) {
+                $query->where('city_id', $request->city_id);
+            })
+            ->when($request->city_name, function ($query) use ($request) {
+                $cities = array_map('trim', explode(',', $request->city_name));
+
+                $query->whereHas('city', function ($q) use ($cities) {
+                    $q->where(function ($sub) use ($cities) {
+                        foreach ($cities as $city) {
+                            $sub->orWhere('name', $city);
+                        }
+                    });
+                });
+            })
+            ->when($request->state_id != 'all', function ($query) use ($request) {
+                if (isset($request->state_id)) {
+                    $query->whereHas('city', function ($q) use ($request) {
+                        $q->where('state_id', $request->state_id);
+                    });
+                }
+            })
+            ->when($request->job_type != 'all', function ($query) use ($request) {
+                $query->where('job_type', 'like', '%' . $request->job_type . '%');
+            })
+            ->when($request->experience != 'all', function ($query) use ($request) {
+                $query->where('experience_required', 'like', '%' . $request->experience . '%');
+            })
+            ->when($request->board != 'all', function ($query) use ($request) {
+                $query->where('board', 'like', $request->board);
+            })
+            ->when($request->min_salary != 0 && $request->max_salary != 0, function ($query) use ($request) {
+                $query->where(function ($q) use ($request) {
+                    $q->where('min_salary', $request->min_salary)
+                        ->orWhere('max_salary', $request->max_salary);
+                });
+            })
+            ->when($request->posted != 'any', function ($query) use ($request) {
+                match ($request->posted) {
+                    '24h'   => $query->where('created_at', '>=', now()->subHours(24)),
+                    'week'  => $query->where('created_at', '>=', now()->subWeek()),
+                    'month' => $query->whereBetween('created_at', [
+                        now()->subMonth()->startOfMonth(),
+                        now()->subMonth()->endOfMonth(),
+                    ]),
+                    default => null,
+                };
+            })
+            ->latest()
+            ->skip($offset)
+            ->paginate($perPage);
+
+        $lastWeekJobs = JobPost::where('created_at', '>=', now()->subWeek())->count();
+
+        $jobs->map(function ($job) {
+            $job->city_name = $job->city->name;
+            $job->subject_name = $job->subject?->name;
+            $job->grade_name = $job->grade?->name;
+            $job->is_liked = $job->like ? true : false;
+            $job->is_applied = $job->applied ? true : false;
+            $job->is_closed = $job->is_closed;
+
+            $job->total_applicants = $job->applied_jobs_count;
+        });
+
+        $extraData['new_jobs'] = $lastWeekJobs;
+
+        return response_formatter(DEFAULT_200, $jobs, $extraData);
+    }
+
+    public function store(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            // School details
+            'school_name' => 'required|string|max:255',
+            'city_id'     => 'required|integer|exists:cities,id',
+
+            'position'  => 'required|string',
+
+            // Job details
+            'subject_id'  => 'nullable|integer|exists:subjects,id',
+            'grade_id'    => 'nullable|integer|exists:grade_levels,id',
+
+            // Facilities
+            'food'         => 'nullable|boolean',
+            'accommodation' => 'nullable|boolean',
+
+            // Job info
+            'job_type'            => 'required|string|max:100',
+            'min_salary'          => 'required|integer|min:0',
+            'max_salary'          => 'required|integer',
+            'experience_required' => 'required|string|max:100',
+
+            // Descriptions
+            'job_description'             => 'required|string',
+            'qualification_requirements'  => 'required|string',
+
+            // Dates
+            'application_deadline' => 'required|date|after:today',
+
+            // Status
+            'status' => 'nullable|boolean',
+        ]);
+
+        if ($validator->fails()) {
+            return response_formatter(DEFAULT_VALIDATION_422, $validator->errors());
+        }
+
+        if (auth()->check()) {
+            $limitStartDate = \Carbon\Carbon::create(2026, 12, 1);
+
+            if (!now()->lt($limitStartDate)) {
+                $user = User::with('plan')
+                    ->find(auth()->user()->id);
+
+                if (!$user->plan) {
+                    return response_formatter(DEFAULT_BAD_REQUEST_400, ['message' => 'Please Purchase a plan to post jobs']);
+                }
+
+                $maxPosts = (int) ($user->plan->features['posts'] ?? 0);
+                $currentMonthPosts = JobPost::where('user_id', $user->id)
+                    ->whereMonth('created_at', now()->month)
+                    ->whereYear('created_at', now()->year)
+                    ->count();
+
+                if ($currentMonthPosts >= $maxPosts) {
+                    return response_formatter(DEFAULT_BAD_REQUEST_400, ['message' => "You have reached your monthly posting limit of {$maxPosts} posts."]);
+                }
+            }
+        }
+
+        $showDate = Carbon::instance(now())
+            ->addDays(90)
+            ->format('Y-m-d');
+
+        $subject = Subject::find($request->subject_id);
+        $grade = GradeLevel::find($request->grade_id);
+        $city = City::find($request->city_id);
+
+        $jobId = strtoupper(
+            \Illuminate\Support\Str::slug($request->school_name, '') . '-' .
+                \Illuminate\Support\Str::slug($city->name ?? 'CITY', '') . '-' .
+                \Illuminate\Support\Str::slug($request->position ?? 'JOB', '') . '-' .
+                \Illuminate\Support\Str::slug($subject->name ?? 'NOSUB', '') . '-' .
+                \Illuminate\Support\Str::slug($grade->name ?? 'NOGRADE', '') . '-' .
+                \Illuminate\Support\Str::slug($data[0] ?? 'NOID', '')
+        );
+
+        $job = JobPost::create([
+            'job_id'                   => $jobId,
+            'school_name'              => $request->school_name,
+            'position'                 => $request->position,
+            'city_id'                  => $request->city_id,
+            'subject_id'               => $request->subject_id,
+            'grade_id'                 => $request->grade_id,
+            'food'                     => $request->boolean('food'),
+            'accommodation'            => $request->boolean('accommodation'),
+            'job_type'                 => $request->job_type,
+            'min_salary'               => $request->min_salary,
+            'max_salary'               => $request->max_salary,
+            'experience_required'      => $request->experience_required,
+            'job_description'          => $request->job_description,
+            'qualification_requirements' => $request->qualification_requirements,
+            'application_deadline'     => $request->application_deadline,
+            'showing_deadline'          => $showDate,
+            'contact_email'            => $request->contact_email,
+            'contact_phone'            => $request->contact_phone,
+            'status'                   => $request->status ?? false,
+            'user_id'                   => auth()->user()->id,
+            'board'                     => $request->board
+        ]);
+
+        return response_formatter(DEFAULT_CREATED_201, $job);
+    }
+
+    // 📌 JOB POST DETAIL
+    public function show($id)
+    {
+        $job = JobPost::withCount('appliedJobs')
+            ->with('city', 'grade', 'subject', 'user.addresses', 'user.additional_info', 'like', 'applied')->findOrFail($id);
+
+        $job->city_name = $job->city->name;
+        $job->subject_name = $job->subject?->name;
+        $job->grade_name = $job->grade?->name;
+        $job->total_applicants = $job->applied_jobs_count;
+        $job->is_applied = $job->applied ? true : false;
+        $job->is_liked = $job->like ? true : false;
+
+        return response_formatter(DEFAULT_200, $job);
+    }
+
+    // 📌 JOB POST UPDATE
+    public function update(Request $request, $id)
+    {
+        $job = JobPost::findOrFail($id);
+
+        $validator = Validator::make($request->all(), [
+            // School details
+            'school_name' => 'required|string|max:255',
+            'city_id'     => 'required|integer|exists:cities,id',
+
+            'position'  => 'required|string',
+
+            // Job details
+            'subject_id'  => 'nullable|integer|exists:subjects,id',
+            'grade_id'    => 'nullable|integer|exists:grade_levels,id',
+
+            // Facilities
+            'food'         => 'nullable|boolean',
+            'accommodation' => 'nullable|boolean',
+
+            // Job info
+            'job_type'            => 'required|string|max:100',
+            'min_salary'          => 'required|integer|min:0',
+            'max_salary'          => 'required|integer',
+            'experience_required' => 'required|string|max:100',
+
+            // Descriptions
+            'job_description'             => 'required|string',
+            'qualification_requirements'  => 'required|string',
+
+            // Dates
+            'application_deadline' => 'required|date|after:today',
+
+            // Status
+            'status' => 'nullable|boolean',
+        ]);
+
+        if ($validator->fails()) {
+            return response_formatter(DEFAULT_VALIDATION_422, $validator->errors());
+        }
+
+        $job->update([
+            'school_name'               => $request->school_name,
+            'position'                  => $request->position,
+            'city_id'                   => $request->city_id,
+            'subject_id'                => $request->subject_id,
+            'grade_id'                  => $request->grade_id,
+            'food'                      => $request->boolean('food'),
+            'accommodation'             => $request->boolean('accommodation'),
+            'job_type'                  => $request->job_type,
+            'min_salary'                => $request->min_salary,
+            'max_salary'                => $request->max_salary,
+            'experience_required'       => $request->experience_required,
+            'job_description'           => $request->job_description,
+            'qualification_requirements' => $request->qualification_requirements,
+            'application_deadline'      => $request->application_deadline,
+            'contact_email'             => $request->contact_email,
+            'contact_phone'             => $request->contact_phone,
+            'status'                    => $request->status ?? false,
+            'is_closed'                 => false,
+            'board'                     => $request->board
+        ]);
+
+        return response_formatter(DEFAULT_UPDATED_200, $job);
+    }
+
+    // 📌 DELETE JOB POST
+    public function destroy($id)
+    {
+        JobPost::findOrFail($id)->delete();
+        return response_formatter(DEFAULT_DELETED_200);
+    }
+
+    public function getMaxStateJobs()
+    {
+        $jobs = \DB::table('states')
+            ->leftJoin('cities', 'states.id', '=', 'cities.state_id')
+            ->leftJoin('job_posts', 'cities.id', '=', 'job_posts.city_id')
+            ->select(
+                'states.id as state_id',
+                'states.name as state_name',
+                \DB::raw('COUNT(job_posts.id) as total_jobs')
+            )
+            ->groupBy('states.id', 'states.name')
+            ->orderByDesc('total_jobs')
+            ->get();
+
+        return response_formatter(DEFAULT_200, $jobs);
+    }
+
+    public function getMaxSubjectsJobs()
+    {
+        $jobs = JobPost::with('subject')
+            ->select('subject_id', \DB::raw('COUNT(*) as total_jobs'))
+            ->groupBy('subject_id')
+            ->orderByDesc('total_jobs')
+            // ->limit(5)
+            ->get();
+
+        $jobs->map(function ($job) {
+            $job->subject_name = $job->subject?->name;
+            return $job;
+        });
+
+        return response_formatter(DEFAULT_200, $jobs);
+    }
+
+    public function getMaxGradesJobs()
+    {
+        $jobs = JobPost::with('grade')
+            ->select('grade_id', \DB::raw('COUNT(*) as total_jobs'))
+            ->groupBy('grade_id')
+            ->orderByDesc('total_jobs')
+            // ->limit(5)
+            ->get();
+
+        $jobs->map(function ($job) {
+            $job->grade_name = $job->grade?->name;
+            return $job;
+        });
+
+        return response_formatter(DEFAULT_200, $jobs);
+    }
+
+    public function like(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'job_post_id' => 'required|exists:job_posts,id',
+        ]);
+
+        if ($validator->fails()) {
+            return response_formatter(DEFAULT_VALIDATION_422, $validator->errors());
+        }
+
+        $userId = auth()->id();
+
+        $likedJob = LikedJob::where([
+            'user_id'     => $userId,
+            'job_post_id' => $request->job_post_id,
+        ])->first();
+
+        if (!$likedJob) {
+            // ✅ LIKE
+            LikedJob::create([
+                'user_id'     => $userId,
+                'job_post_id' => $request->job_post_id,
+            ]);
+
+            return response_formatter(DEFAULT_200, [
+                'liked' => true,
+                'message' => 'Job liked successfully'
+            ]);
+        } else {
+            // ❌ UNLIKE
+            $likedJob->delete();
+
+            return response_formatter(DEFAULT_200, [
+                'liked' => false,
+                'message' => 'Job unliked successfully'
+            ]);
+        }
+    }
+
+    public function close($id)
+    {
+        $jobsPost = JobPost::find($id);
+        $jobsPost->update(['is_closed' => true]);
+
+        return response_formatter(DEFAULT_200, [
+            'liked' => true,
+            'message' => 'Job closed successfully'
+        ]);
+    }
+
+    public function currentVacanies()
+    {
+
+        if (in_array(auth()->user()->user_type, [3, 2])) {
+            $perPage = (int) request()->get('perPage', 10);
+            $offset  = (int) request()->get('offset', 0);
+
+            $jobs = JobPost::with('city', 'grade', 'subject', 'appliedJobs.user.additional_info')
+                ->where('user_id', auth()->user()->id)
+                ->latest()
+                ->skip($offset)
+                ->paginate($perPage);
+
+            $jobs->map(function ($job) {
+                $job->city_name = $job->city->name;
+                $job->subject_name = $job->subject?->name;
+                $job->grade_name = $job->grade?->name;
+                $job->is_liked = $job->like ? true : false;
+
+                $job->total_applicants = $job->appliedJobs->count();
+            });
+
+            return response_formatter(DEFAULT_200, $jobs);
+        }
+    }
+
+    public function applyJob($id)
+    {
+        $userId = auth()->id();
+
+        // ✅ Check job exists
+        $job = JobPost::findOrFail($id);
+
+        // ✅ Prevent duplicate application
+        $alreadyApplied = AppliedJob::where([
+            'user_id'     => $userId,
+            'job_post_id' => $id,
+        ])->exists();
+
+        if ($alreadyApplied) {
+            return response_formatter(DEFAULT_200, [
+                'applied' => true,
+                'message' => 'You have already applied for this job'
+            ]);
+        }
+
+        $planLimits = [
+            1 => 10,
+            2 => 20,
+            3 => null,
+        ];
+
+        // if ($job->user) {
+        //     $planId = $job->user->plan_id;
+
+        //     $limit = $planLimits[$planId];
+
+        //     // Check application count only if plan is not unlimited
+        //     if (!is_null($limit)) {
+        //         $applicationCount = AppliedJob::where('job_post_id', $id)->count();
+
+        //         if ($applicationCount >= $limit) {
+        //             return response_formatter(DEFAULT_200, [
+        //                 'success' => false,
+        //                 'message' => 'Application limit has been reached for this job.'
+        //             ]);
+        //         }
+        //     }
+
+        //     // ✅ Apply job
+        //     AppliedJob::create([
+        //         'user_id'     => $userId,
+        //         'job_post_id' => $id,
+        //     ]);
+
+        // } else {
+        AppliedJob::create([
+            'user_id'     => $userId,
+            'job_post_id' => $id,
+        ]);
+        // }
+
+        $job = JobPost::with('applied_job.user.addresses', 'applied_job.user.additional_info')->findOrFail($id);
+
+        // if ($job->contact_email) {
+        // Mail::to($job->contact_email)->send(new MailAppliedJob($job));
+        // Mail::to(['akathuria289@gmail.com'])->send(new MailAppliedJob($job));
+        // }
+        // , 'fendernikhil@gmail.com', 'devanshuniyal0306@gmail.com'
+
+        // Calculate job age in days
+        $jobAgeInDays = Carbon::parse($job->created_at)->diffInDays(now());
+
+        if ($jobAgeInDays > 30) {
+            $message = 'Your interest has been expressed to the school. In case this job is still open, the school will get back to you via your registered mobile / email';
+            Mail::to(['teachinghood@gmail.com', 'shrupp19@gmail.com', 'devanshuniyal0306@gmail.com'])->send(new MailAppliedJob($job, false));
+        } else {
+            $schoolName = $job->school_name ?? 'the school';
+            $message = "Your application has been forwarded to {$schoolName}. If your profile matches, they will contact you via your registered mobile / email.";
+            Mail::to(['teachinghood@gmail.com', 'shrupp19@gmail.com', 'devanshuniyal0306@gmail.com'])->send(new MailAppliedJob($job, true));
+            // Mail::to(['akathuria289@gmail.com'])->send(new MailAppliedJob($job, true));
+        }
+
+        return response_formatter(DEFAULT_200, [
+            'success' => true,
+            'message' => $message
+        ]);
+    }
+
+    public function appliedJobs(Request $request)
+    {
+        $perPage = (int) request()->get('perPage', 10);
+        $offset  = (int) request()->get('offset', 0);
+
+        $appliedJobs = AppliedJob::with('user', 'job_posted')
+            ->where('user_id', auth()->user()->id)
+            ->when($request->search, function ($query) use ($request) {
+                $query->whereHas('job_posted', function ($q) use ($request) {
+                    $q->where('school_name', 'like', '%' . $request->search . '%')
+                        ->orWhere('job_description', 'like', '%' . $request->search . '%')
+                        ->orWhere('position', 'like', '%' . $request->search . '%');
+                });
+            })
+            ->latest()
+            ->skip($offset)
+            ->paginate($perPage);
+
+        $appliedJobs->map(function ($job) {
+            $job->position = $job->position;
+            $posted_job = $job->job_posted;
+
+            $posted_job->subject_name = $job->subject?->name;
+            $posted_job->grade_name = $job->grade?->name;
+            // $job->is_liked = $job->like ? true : false;
+            // $job->total_applicants = 0;
+        });
+
+        return response_formatter(DEFAULT_200, $appliedJobs);
+    }
+}
